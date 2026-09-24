@@ -1,6 +1,8 @@
 # Daily Energy Gradient Card
 
 A custom Home Assistant Lovelace card that displays daily energy consumption as vertical bars on a fixed green → yellow → red scale.
+<img width="696" height="530" alt="image" src="https://github.com/user-attachments/assets/436e0dad-ee66-4963-8c6b-e2b3430432ac" />
+
 
 ## Features
 
