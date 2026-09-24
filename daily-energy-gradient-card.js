@@ -1,0 +1,465 @@
+class DailyEnergyGradientCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._data = [];
+    this._loading = false;
+    this._lastLoad = 0;
+  }
+
+  setConfig(config) {
+    if (!config?.entity) throw new Error("Укажите entity");
+    this.config = {
+      name: "Расход по дням",
+      days: 7,
+      day_options: [7, 14, 30],
+      max: 8,
+      unit: "кВт⋅ч",
+      decimals: 2,
+      height: 190,
+      ...config,
+    };
+    this.config.day_options = [...new Set(
+      (Array.isArray(this.config.day_options) ? this.config.day_options : [7, 14, 30])
+        .map(Number)
+        .filter((value) => Number.isInteger(value) && value > 0),
+    )].sort((a, b) => a - b);
+    if (!this.config.day_options.length) this.config.day_options = [7, 14, 30];
+
+    const configuredDays = Math.max(1, Number(this.config.days) || 7);
+    const storageKey = `daily-energy-gradient-card:${this.config.entity}:days`;
+    try {
+      const savedDays = Number(localStorage.getItem(storageKey));
+      this.config.days = this.config.day_options.includes(savedDays)
+        ? savedDays
+        : configuredDays;
+    } catch (_error) {
+      this.config.days = configuredDays;
+    }
+    if (!this.config.day_options.includes(this.config.days)) {
+      this.config.day_options.push(this.config.days);
+      this.config.day_options.sort((a, b) => a - b);
+    }
+    this._restoreCache();
+    this._lastLoad = 0;
+    this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    const now = Date.now();
+    if (!this._loading && now - this._lastLoad > 5 * 60 * 1000) {
+      this._loadHistory();
+    }
+  }
+
+  getCardSize() {
+    return 4;
+  }
+
+  _dayKey(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  _days() {
+    const result = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    for (let offset = this.config.days - 1; offset >= 0; offset -= 1) {
+      const date = new Date(today);
+      date.setDate(today.getDate() - offset);
+      result.push({
+        key: this._dayKey(date),
+        label: new Intl.DateTimeFormat("ru-RU", { weekday: "short" })
+          .format(date)
+          .replace(".", ""),
+        date,
+        values: [],
+      });
+    }
+    return result;
+  }
+
+  _cacheKey() {
+    return `daily-energy-gradient-card:data:${this.config.entity}:${this.config.days}`;
+  }
+
+  _restoreCache() {
+    this._data = [];
+    try {
+      const cached = JSON.parse(localStorage.getItem(this._cacheKey()) || "null");
+      if (!cached?.timestamp || Date.now() - cached.timestamp > 24 * 60 * 60 * 1000) return;
+      const values = new Map(
+        (Array.isArray(cached.data) ? cached.data : [])
+          .filter((item) => item?.key && Number.isFinite(Number(item.value)))
+          .map((item) => [item.key, Number(item.value)]),
+      );
+      this._data = this._days().map((day) => ({
+        ...day,
+        value: values.get(day.key) ?? 0,
+      }));
+    } catch (_error) {
+      this._data = [];
+    }
+  }
+
+  _saveCache() {
+    try {
+      localStorage.setItem(this._cacheKey(), JSON.stringify({
+        timestamp: Date.now(),
+        data: this._data.map((day) => ({ key: day.key, value: day.value })),
+      }));
+    } catch (_error) {
+      // Без localStorage карточка просто загружается обычным способом.
+    }
+  }
+
+  async _loadHistory() {
+    if (!this._hass || !this.config) return;
+    this._loading = true;
+    this._render();
+
+    try {
+      const days = this._days();
+      const start = new Date(days[0].date);
+      const historyStart = new Date(start);
+      historyStart.setDate(historyStart.getDate() - 1);
+      const end = new Date();
+      const entity = encodeURIComponent(this.config.entity);
+      const path = `history/period/${encodeURIComponent(historyStart.toISOString())}`
+        + `?filter_entity_id=${entity}`
+        + `&end_time=${encodeURIComponent(end.toISOString())}`
+        + "&no_attributes=true";
+
+      // Оба источника загружаются одновременно. Кэш уже показан на экране,
+      // поэтому обновление происходит незаметно в фоне.
+      const [historyResult, statisticsResult] = await Promise.allSettled([
+        this._hass.callApi("GET", path),
+        this._hass.callWS({
+          type: "recorder/statistics_during_period",
+          start_time: historyStart.toISOString(),
+          end_time: end.toISOString(),
+          statistic_ids: [this.config.entity],
+          period: "day",
+          types: ["sum"],
+        }),
+      ]);
+      if (historyResult.status === "rejected" && statisticsResult.status === "rejected") {
+        throw historyResult.reason || statisticsResult.reason || new Error("История недоступна");
+      }
+
+      const response = historyResult.status === "fulfilled" ? historyResult.value : [];
+      const states = Array.isArray(response?.[0]) ? response[0] : [];
+      const points = states
+        .map((item) => {
+          const value = Number(item.state);
+          const stamp = item.last_updated || item.last_changed;
+          const time = stamp ? new Date(stamp).getTime() : NaN;
+          return { value, time };
+        })
+        .filter((point) => Number.isFinite(point.value) && Number.isFinite(point.time));
+
+      const currentValue = Number(this._hass.states?.[this.config.entity]?.state);
+      if (Number.isFinite(currentValue)) {
+        points.push({ value: currentValue, time: end.getTime() });
+      }
+      points.sort((a, b) => a.time - b.time);
+
+      const historyData = days.map((day) => {
+        const dayStart = day.date.getTime();
+        const nextDay = new Date(day.date);
+        nextDay.setDate(nextDay.getDate() + 1);
+        const dayEnd = Math.min(nextDay.getTime(), end.getTime());
+
+        let segmentStart = null;
+        let previous = null;
+        let completedSegments = 0;
+
+        for (const point of points) {
+          if (point.time <= dayStart) {
+            previous = point.value;
+            segmentStart = point.value;
+            continue;
+          }
+          if (point.time > dayEnd) break;
+
+          if (previous === null) {
+            previous = point.value;
+            segmentStart = point.value;
+            continue;
+          }
+
+          if (point.value < previous) {
+            // Сбросом считаем только падение почти к нулю. Небольшое снижение
+            // — это коррекция показания, и его нельзя прибавлять как новый
+            // цикл: именно это раньше давало двойные значения вроде 11,26.
+            const resetLimit = Math.max(0.1, previous * 0.2);
+            if (point.value <= resetLimit) {
+              completedSegments += Math.max(0, previous - segmentStart);
+              segmentStart = point.value;
+            }
+          }
+          previous = point.value;
+        }
+
+        const value = previous !== null && segmentStart !== null
+          ? completedSegments + Math.max(0, previous - segmentStart)
+          : 0;
+        return { ...day, value: Math.max(0, value) };
+      });
+
+      // Recorder обычно хранит подробную историю меньше, чем долгосрочную
+      // статистику. Для старых дней берём разницу соседних значений `sum`.
+      // В отличие от `change`, это не удваивает расход при коррекции датчика.
+      const statisticValues = new Map();
+      try {
+        const statistics = statisticsResult.status === "fulfilled"
+          ? statisticsResult.value
+          : {};
+        const rows = (statistics?.[this.config.entity] || [])
+          .map((row) => {
+            const rawTime = row.start;
+            const time = typeof rawTime === "number"
+              ? (rawTime < 1e12 ? rawTime * 1000 : rawTime)
+              : new Date(rawTime).getTime();
+            return { time, sum: Number(row.sum) };
+          })
+          .filter((row) => Number.isFinite(row.time) && Number.isFinite(row.sum))
+          .sort((a, b) => a.time - b.time);
+
+        for (let index = 1; index < rows.length; index += 1) {
+          const value = rows[index].sum - rows[index - 1].sum;
+          if (Number.isFinite(value) && value >= 0) {
+            statisticValues.set(
+              this._dayKey(new Date(rows[index].time)),
+              value,
+            );
+          }
+        }
+      } catch (_error) {
+        // Если статистики нет, остаются доступные значения Recorder.
+      }
+
+      const todayKey = days[days.length - 1]?.key;
+      this._data = historyData.map((day) => {
+        // Так же, как панель «Энергия»: для каждого завершённого дня берём
+        // прирост накопительной долгосрочной статистики sum. Сырая история
+        // используется только сегодня либо когда статистика недоступна.
+        if (
+          day.key !== todayKey
+          && statisticValues.has(day.key)
+        ) {
+          return { ...day, value: statisticValues.get(day.key) };
+        }
+        return day;
+      });
+      this._saveCache();
+      this._error = "";
+      this._lastLoad = Date.now();
+    } catch (error) {
+      this._error = error?.message || String(error);
+    } finally {
+      this._loading = false;
+      this._render();
+    }
+  }
+
+  _render() {
+    if (!this.shadowRoot || !this.config) return;
+
+    const max = Math.max(Number(this.config.max) || 8, 0.01);
+    const decimals = Math.max(0, Number(this.config.decimals) || 0);
+    const data = this._data.length ? this._data : this._days().map((d) => ({ ...d, value: 0 }));
+    const today = data[data.length - 1]?.value || 0;
+    const chartMinWidth = Math.max(0, data.length * 54);
+
+    const rangeButtons = this.config.day_options.map((days) => `
+      <button class="range-button${days === this.config.days ? " active" : ""}"
+        data-days="${days}" type="button">${days} дн.</button>
+    `).join("");
+
+    const bars = data.map((day) => {
+      const pct = Math.min(Math.max((day.value / max) * 100, 0), 100);
+      const bgScale = pct > 0 ? 10000 / pct : 100;
+      const value = day.value.toFixed(decimals).replace(".", ",");
+      return `
+        <div class="day">
+          <div class="value">${value}</div>
+          <div class="track">
+            <div class="fill" style="height:${pct}%;background-size:100% ${bgScale}%;"></div>
+          </div>
+          <div class="label">${day.label}</div>
+        </div>`;
+    }).join("");
+
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host {
+          --energy-gradient: linear-gradient(
+            to top,
+            #30d158 0%,
+            #78e63d 32%,
+            #ffd60a 58%,
+            #ff9f0a 78%,
+            #ff453a 100%
+          );
+          display: block;
+        }
+        ha-card {
+          padding: 18px 18px 14px;
+          border-radius: 24px;
+          overflow: hidden;
+          border: 1px solid rgba(128, 128, 128, 0.14);
+          box-shadow: 0 10px 28px rgba(0, 0, 0, 0.10);
+          font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+        }
+        .header {
+          display: flex;
+          align-items: flex-end;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 18px;
+        }
+        .ranges {
+          display: flex;
+          gap: 6px;
+          margin: -6px 0 14px;
+        }
+        .range-button {
+          appearance: none;
+          border: 0;
+          border-radius: 999px;
+          padding: 6px 11px;
+          background: rgba(128, 128, 128, 0.12);
+          color: var(--secondary-text-color);
+          font: inherit;
+          font-size: 12px;
+          font-weight: 700;
+          cursor: pointer;
+        }
+        .range-button.active {
+          background: var(--primary-color, #03a9f4);
+          color: var(--text-primary-color, #fff);
+        }
+        .chart-scroll {
+          overflow-x: auto;
+          overflow-y: hidden;
+          scrollbar-width: thin;
+        }
+        .title { font-size: 17px; font-weight: 650; }
+        .today { font-size: 24px; font-weight: 750; line-height: 1; }
+        .unit { margin-left: 4px; font-size: 12px; color: var(--secondary-text-color); }
+        .chart {
+          height: ${Number(this.config.height) || 190}px;
+          min-width: ${chartMinWidth}px;
+          display: grid;
+          grid-template-columns: repeat(${data.length}, minmax(0, 1fr));
+          gap: 10px;
+          align-items: stretch;
+        }
+        .day { position: relative; min-width: 0; padding-top: 27px; }
+        .track {
+          position: absolute;
+          inset: 27px 0 29px;
+          overflow: hidden;
+          border-radius: 11px;
+          background: rgba(128, 128, 128, 0.055);
+        }
+        .fill {
+          position: absolute;
+          z-index: 1;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          min-height: 0;
+          border-radius: 11px;
+          background-image: var(--energy-gradient);
+          background-position: bottom;
+          background-repeat: no-repeat;
+          box-shadow: 0 4px 12px rgba(48, 209, 88, 0.18);
+        }
+        .value {
+          position: absolute;
+          z-index: 2;
+          top: 3px;
+          left: 50%;
+          transform: translateX(-50%);
+          white-space: nowrap;
+          font-size: 13px;
+          font-weight: 750;
+          line-height: 1;
+        }
+        .label {
+          position: absolute;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          text-align: center;
+          color: var(--secondary-text-color);
+          font-size: 14px;
+          font-weight: 750;
+          text-transform: capitalize;
+        }
+        .status {
+          margin-top: 8px;
+          color: var(--secondary-text-color);
+          font-size: 11px;
+        }
+        .error { color: var(--error-color, #ff453a); }
+      </style>
+      <ha-card>
+        <div class="header">
+          <div class="title">${this.config.name}</div>
+          <div><span class="today">${today.toFixed(decimals).replace(".", ",")}</span><span class="unit">${this.config.unit}</span></div>
+        </div>
+        <div class="ranges">${rangeButtons}</div>
+        <div class="chart-scroll"><div class="chart">${bars}</div></div>
+        ${this._loading && !this._data.length ? '<div class="status">Обновление истории…</div>' : ''}
+        ${this._error ? `<div class="status error">${this._error}</div>` : ''}
+      </ha-card>`;
+
+    this.shadowRoot.querySelectorAll(".range-button").forEach((button) => {
+      button.addEventListener("click", () => {
+        const days = Number(button.dataset.days);
+        if (!Number.isInteger(days) || days <= 0 || days === this.config.days) return;
+        this.config.days = days;
+        try {
+          localStorage.setItem(
+            `daily-energy-gradient-card:${this.config.entity}:days`,
+            String(days),
+          );
+        } catch (_error) {
+          // Карточка продолжит работать, даже если хранилище браузера закрыто.
+        }
+        this._restoreCache();
+        this._lastLoad = 0;
+        this._loadHistory();
+      });
+    });
+
+    // При первом открытии и после смены периода показываем последние дни.
+    const scroll = this.shadowRoot.querySelector(".chart-scroll");
+    if (scroll) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          scroll.scrollLeft = scroll.scrollWidth;
+        });
+      });
+    }
+  }
+}
+
+if (!customElements.get("daily-energy-gradient-card")) {
+  customElements.define("daily-energy-gradient-card", DailyEnergyGradientCard);
+}
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: "daily-energy-gradient-card",
+  name: "Daily Energy Gradient Card",
+  description: "Суточный расход за неделю на фиксированной зелёно-красной шкале",
+  preview: false,
+});
