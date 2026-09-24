@@ -24,14 +24,26 @@ Use a continuous cumulative energy sensor, normally one with:
 
 Do not use a monthly `utility_meter` as the source when the original cumulative sensor is available.
 
-## Installation with HACS
+## Test installation with HACS
 
-1. Open HACS.
-2. Go to **Frontend**.
-3. Open the menu and choose **Custom repositories**.
-4. Add this repository as category **Dashboard**.
-5. Install **Daily Energy Gradient Card**.
-6. Refresh Home Assistant.
+This card is not yet included in the default HACS catalog. Install it for testing as a custom repository.
+
+[![Open your Home Assistant instance and add this repository to HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=rbalaev&repository=daily-energy-gradient-card&category=plugin)
+
+Or add it manually:
+
+1. Open **HACS** and go to **Dashboard**.
+2. Open the top-right menu and choose **Custom repositories**.
+3. Enter `https://github.com/rbalaev/daily-energy-gradient-card`.
+4. Select **Dashboard** as the category and click **Add**.
+5. Find **Daily Energy Gradient Card** in HACS and click **Download**.
+6. Refresh Home Assistant. HACS should register the frontend resource automatically.
+
+The installed resource URL is normally:
+
+```text
+/hacsfiles/daily-energy-gradient-card/daily-energy-gradient-card.js
+```
 
 ## Manual installation
 
