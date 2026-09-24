@@ -1,15 +1,16 @@
 # Daily Energy Gradient Card
 
-A custom Home Assistant Lovelace card that displays daily energy consumption as vertical bars on a fixed green → yellow → red scale.
+A custom Home Assistant Lovelace card that displays daily or monthly energy consumption as vertical bars on a fixed green → yellow → red scale.
 
 ![Daily Energy Gradient Card preview](assets/daily-energy-gradient-card-preview.jpg)
 
 ## Features
 
-- Daily energy values calculated from Home Assistant long-term statistics (`sum`), like the Energy dashboard.
+- Daily and monthly energy values calculated from Home Assistant long-term statistics (`sum`), like the Energy dashboard.
 - Fixed gradient scale: low values stay green; higher values reveal yellow, orange, and red.
 - Selectable ranges such as 7, 14, and 30 days.
-- Horizontal scrolling with automatic positioning on the latest day.
+- Built-in **Days / Months** switch with configurable 3, 6, and 12 month ranges.
+- Horizontal scrolling with automatic positioning on the latest period.
 - Fast reopening with stale-while-revalidate browser caching.
 - Live refresh in the background on every card load.
 - Works inside regular dashboards and Bubble Card pop-ups.
@@ -61,13 +62,20 @@ The installed resource URL is normally:
 ```yaml
 type: custom:daily-energy-gradient-card
 entity: sensor.boiler_energy
-name: Boiler consumption by day
+name: Boiler energy consumption
+mode: daily
 days: 7
 day_options:
   - 7
   - 14
   - 30
+months: 6
+month_options:
+  - 3
+  - 6
+  - 12
 max: 8
+month_max: 240
 unit: kWh
 decimals: 2
 height: 240
@@ -87,13 +95,20 @@ icon: mdi:chart-bar
 cards:
   - type: custom:daily-energy-gradient-card
     entity: sensor.boiler_energy
-    name: Boiler consumption by day
+    name: Boiler energy consumption
+    mode: daily
     days: 7
     day_options:
       - 7
       - 14
       - 30
+    months: 6
+    month_options:
+      - 3
+      - 6
+      - 12
     max: 8
+    month_max: 240
     unit: kWh
     decimals: 2
     height: 240
@@ -112,10 +127,14 @@ tap_action:
 | Option | Required | Default | Description |
 | --- | --- | --- | --- |
 | `entity` | Yes | — | Continuous cumulative energy sensor. |
-| `name` | No | `Расход по дням` | Card title. |
+| `name` | No | `Расход энергии` | Card title. |
+| `mode` | No | `daily` | Initially selected mode: `daily` or `monthly`. The user's choice is saved in the browser. |
 | `days` | No | `7` | Initially selected range. |
 | `day_options` | No | `[7, 14, 30]` | Selectable ranges. |
-| `max` | No | `8` | Top of the fixed color scale. |
+| `months` | No | `6` | Initially selected number of months. |
+| `month_options` | No | `[3, 6, 12]` | Selectable monthly ranges. |
+| `max` | No | `8` | Top of the fixed color scale in daily mode. |
+| `month_max` | No | `max × 30` | Top of the fixed color scale in monthly mode. |
 | `unit` | No | `кВт⋅ч` | Displayed unit. |
 | `decimals` | No | `2` | Decimal places. |
 | `height` | No | `190` | Chart height in pixels. |

@@ -10,10 +10,14 @@ class DailyEnergyGradientCard extends HTMLElement {
   setConfig(config) {
     if (!config?.entity) throw new Error("Укажите entity");
     this.config = {
-      name: "Расход по дням",
+      name: "Расход энергии",
+      mode: "daily",
       days: 7,
       day_options: [7, 14, 30],
+      months: 6,
+      month_options: [3, 6, 12],
       max: 8,
+      month_max: null,
       unit: "кВт⋅ч",
       decimals: 2,
       height: 190,
@@ -25,6 +29,22 @@ class DailyEnergyGradientCard extends HTMLElement {
         .filter((value) => Number.isInteger(value) && value > 0),
     )].sort((a, b) => a - b);
     if (!this.config.day_options.length) this.config.day_options = [7, 14, 30];
+    this.config.month_options = [...new Set(
+      (Array.isArray(this.config.month_options) ? this.config.month_options : [3, 6, 12])
+        .map(Number)
+        .filter((value) => Number.isInteger(value) && value > 0),
+    )].sort((a, b) => a - b);
+    if (!this.config.month_options.length) this.config.month_options = [3, 6, 12];
+
+    const modeStorageKey = `daily-energy-gradient-card:${this.config.entity}:mode`;
+    try {
+      const savedMode = localStorage.getItem(modeStorageKey);
+      this.config.mode = ["daily", "monthly"].includes(savedMode)
+        ? savedMode
+        : (this.config.mode === "monthly" ? "monthly" : "daily");
+    } catch (_error) {
+      this.config.mode = this.config.mode === "monthly" ? "monthly" : "daily";
+    }
 
     const configuredDays = Math.max(1, Number(this.config.days) || 7);
     const storageKey = `daily-energy-gradient-card:${this.config.entity}:days`;
@@ -39,6 +59,20 @@ class DailyEnergyGradientCard extends HTMLElement {
     if (!this.config.day_options.includes(this.config.days)) {
       this.config.day_options.push(this.config.days);
       this.config.day_options.sort((a, b) => a - b);
+    }
+    const configuredMonths = Math.max(1, Number(this.config.months) || 6);
+    const monthStorageKey = `daily-energy-gradient-card:${this.config.entity}:months`;
+    try {
+      const savedMonths = Number(localStorage.getItem(monthStorageKey));
+      this.config.months = this.config.month_options.includes(savedMonths)
+        ? savedMonths
+        : configuredMonths;
+    } catch (_error) {
+      this.config.months = configuredMonths;
+    }
+    if (!this.config.month_options.includes(this.config.months)) {
+      this.config.month_options.push(this.config.months);
+      this.config.month_options.sort((a, b) => a - b);
     }
     this._restoreCache();
     this._lastLoad = 0;
@@ -64,6 +98,12 @@ class DailyEnergyGradientCard extends HTMLElement {
     return `${y}-${m}-${d}`;
   }
 
+  _monthKey(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    return `${y}-${m}`;
+  }
+
   _days() {
     const result = [];
     const today = new Date();
@@ -83,8 +123,43 @@ class DailyEnergyGradientCard extends HTMLElement {
     return result;
   }
 
+  _months() {
+    const result = [];
+    const currentMonth = new Date();
+    currentMonth.setDate(1);
+    currentMonth.setHours(0, 0, 0, 0);
+    for (let offset = this.config.months - 1; offset >= 0; offset -= 1) {
+      const date = new Date(currentMonth);
+      date.setMonth(currentMonth.getMonth() - offset);
+      const month = new Intl.DateTimeFormat("ru-RU", { month: "short" })
+        .format(date)
+        .replace(".", "");
+      result.push({
+        key: this._monthKey(date),
+        label: `${month} ${String(date.getFullYear()).slice(-2)}`,
+        date,
+        values: [],
+      });
+    }
+    return result;
+  }
+
+  _periods() {
+    return this.config.mode === "monthly" ? this._months() : this._days();
+  }
+
+  _rangeValue() {
+    return this.config.mode === "monthly" ? this.config.months : this.config.days;
+  }
+
+  _rangeOptions() {
+    return this.config.mode === "monthly"
+      ? this.config.month_options
+      : this.config.day_options;
+  }
+
   _cacheKey() {
-    return `daily-energy-gradient-card:data:${this.config.entity}:${this.config.days}`;
+    return `daily-energy-gradient-card:data:${this.config.entity}:${this.config.mode}:${this._rangeValue()}`;
   }
 
   _restoreCache() {
@@ -97,7 +172,7 @@ class DailyEnergyGradientCard extends HTMLElement {
           .filter((item) => item?.key && Number.isFinite(Number(item.value)))
           .map((item) => [item.key, Number(item.value)]),
       );
-      this._data = this._days().map((day) => ({
+      this._data = this._periods().map((day) => ({
         ...day,
         value: values.get(day.key) ?? 0,
       }));
@@ -117,12 +192,62 @@ class DailyEnergyGradientCard extends HTMLElement {
     }
   }
 
+  async _loadMonthlyStatistics() {
+    const months = this._months();
+    const start = new Date(months[0].date);
+    start.setDate(start.getDate() - 2);
+    const end = new Date();
+    const statistics = await this._hass.callWS({
+      type: "recorder/statistics_during_period",
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
+      statistic_ids: [this.config.entity],
+      period: "day",
+      types: ["sum"],
+    });
+    const rows = (statistics?.[this.config.entity] || [])
+      .map((row) => {
+        const rawTime = row.start;
+        const time = typeof rawTime === "number"
+          ? (rawTime < 1e12 ? rawTime * 1000 : rawTime)
+          : new Date(rawTime).getTime();
+        return { time, sum: Number(row.sum) };
+      })
+      .filter((row) => Number.isFinite(row.time) && Number.isFinite(row.sum))
+      .sort((a, b) => a.time - b.time);
+
+    if (rows.length < 2) {
+      throw new Error("Для месячного режима недостаточно долгосрочной статистики sum");
+    }
+
+    const values = new Map(months.map((month) => [month.key, 0]));
+    for (let index = 1; index < rows.length; index += 1) {
+      const value = rows[index].sum - rows[index - 1].sum;
+      const key = this._monthKey(new Date(rows[index].time));
+      if (values.has(key) && Number.isFinite(value) && value >= 0) {
+        values.set(key, values.get(key) + value);
+      }
+    }
+
+    this._data = months.map((month) => ({
+      ...month,
+      value: Math.max(0, values.get(month.key) || 0),
+    }));
+    this._saveCache();
+    this._error = "";
+    this._lastLoad = Date.now();
+  }
+
   async _loadHistory() {
     if (!this._hass || !this.config) return;
     this._loading = true;
     this._render();
 
     try {
+      if (this.config.mode === "monthly") {
+        await this._loadMonthlyStatistics();
+        return;
+      }
       const days = this._days();
       const start = new Date(days[0].date);
       const historyStart = new Date(start);
@@ -270,15 +395,27 @@ class DailyEnergyGradientCard extends HTMLElement {
   _render() {
     if (!this.shadowRoot || !this.config) return;
 
-    const max = Math.max(Number(this.config.max) || 8, 0.01);
+    const dailyMax = Math.max(Number(this.config.max) || 8, 0.01);
+    const max = this.config.mode === "monthly"
+      ? Math.max(Number(this.config.month_max) || dailyMax * 30, 0.01)
+      : dailyMax;
     const decimals = Math.max(0, Number(this.config.decimals) || 0);
-    const data = this._data.length ? this._data : this._days().map((d) => ({ ...d, value: 0 }));
-    const today = data[data.length - 1]?.value || 0;
-    const chartMinWidth = Math.max(0, data.length * 54);
+    const data = this._data.length ? this._data : this._periods().map((d) => ({ ...d, value: 0 }));
+    const currentValue = data[data.length - 1]?.value || 0;
+    const chartMinWidth = Math.max(0, data.length * (this.config.mode === "monthly" ? 66 : 54));
 
-    const rangeButtons = this.config.day_options.map((days) => `
-      <button class="range-button${days === this.config.days ? " active" : ""}"
-        data-days="${days}" type="button">${days} дн.</button>
+    const modeButtons = `
+      <button class="mode-button${this.config.mode === "daily" ? " active" : ""}"
+        data-mode="daily" type="button">Дни</button>
+      <button class="mode-button${this.config.mode === "monthly" ? " active" : ""}"
+        data-mode="monthly" type="button">Месяцы</button>
+    `;
+
+    const activeRange = this._rangeValue();
+    const rangeSuffix = this.config.mode === "monthly" ? "мес." : "дн.";
+    const rangeButtons = this._rangeOptions().map((range) => `
+      <button class="range-button${range === activeRange ? " active" : ""}"
+        data-range="${range}" type="button">${range} ${rangeSuffix}</button>
     `).join("");
 
     const bars = data.map((day) => {
@@ -328,6 +465,20 @@ class DailyEnergyGradientCard extends HTMLElement {
           gap: 6px;
           margin: -6px 0 14px;
         }
+        .controls {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px 12px;
+          margin: -6px 0 14px;
+        }
+        .modes, .controls .ranges {
+          display: flex;
+          gap: 6px;
+          margin: 0;
+        }
+        .mode-button,
         .range-button {
           appearance: none;
           border: 0;
@@ -340,6 +491,7 @@ class DailyEnergyGradientCard extends HTMLElement {
           font-weight: 700;
           cursor: pointer;
         }
+        .mode-button.active,
         .range-button.active {
           background: var(--primary-color, #03a9f4);
           color: var(--text-primary-color, #fff);
@@ -413,9 +565,12 @@ class DailyEnergyGradientCard extends HTMLElement {
       <ha-card>
         <div class="header">
           <div class="title">${this.config.name}</div>
-          <div><span class="today">${today.toFixed(decimals).replace(".", ",")}</span><span class="unit">${this.config.unit}</span></div>
+          <div><span class="today">${currentValue.toFixed(decimals).replace(".", ",")}</span><span class="unit">${this.config.unit}</span></div>
         </div>
-        <div class="ranges">${rangeButtons}</div>
+        <div class="controls">
+          <div class="modes">${modeButtons}</div>
+          <div class="ranges">${rangeButtons}</div>
+        </div>
         <div class="chart-scroll"><div class="chart">${bars}</div></div>
         ${this._loading && !this._data.length ? '<div class="status">Обновление истории…</div>' : ''}
         ${this._error ? `<div class="status error">${this._error}</div>` : ''}
@@ -423,13 +578,33 @@ class DailyEnergyGradientCard extends HTMLElement {
 
     this.shadowRoot.querySelectorAll(".range-button").forEach((button) => {
       button.addEventListener("click", () => {
-        const days = Number(button.dataset.days);
-        if (!Number.isInteger(days) || days <= 0 || days === this.config.days) return;
-        this.config.days = days;
+        const range = Number(button.dataset.range);
+        if (!Number.isInteger(range) || range <= 0 || range === this._rangeValue()) return;
+        const field = this.config.mode === "monthly" ? "months" : "days";
+        this.config[field] = range;
         try {
           localStorage.setItem(
-            `daily-energy-gradient-card:${this.config.entity}:days`,
-            String(days),
+            `daily-energy-gradient-card:${this.config.entity}:${field}`,
+            String(range),
+          );
+        } catch (_error) {
+          // Карточка продолжит работать, даже если хранилище браузера закрыто.
+        }
+        this._restoreCache();
+        this._lastLoad = 0;
+        this._loadHistory();
+      });
+    });
+
+    this.shadowRoot.querySelectorAll(".mode-button").forEach((button) => {
+      button.addEventListener("click", () => {
+        const mode = button.dataset.mode;
+        if (!["daily", "monthly"].includes(mode) || mode === this.config.mode) return;
+        this.config.mode = mode;
+        try {
+          localStorage.setItem(
+            `daily-energy-gradient-card:${this.config.entity}:mode`,
+            mode,
           );
         } catch (_error) {
           // Карточка продолжит работать, даже если хранилище браузера закрыто.
@@ -460,6 +635,6 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "daily-energy-gradient-card",
   name: "Daily Energy Gradient Card",
-  description: "Суточный расход за неделю на фиксированной зелёно-красной шкале",
+  description: "Расход энергии по дням или месяцам на фиксированной зелёно-красной шкале",
   preview: false,
 });
