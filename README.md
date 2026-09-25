@@ -81,6 +81,30 @@ decimals: 2
 height: 240
 ```
 
+### Enabling modes
+
+Modes are enabled by the YAML groups that are present:
+
+- Add `days` and/or `day_options` to enable **Days**.
+- Add `months` and/or `month_options` to enable **Months**.
+- Add both groups to show the **Days / Months** switch.
+- If a mode has only one configured range, its range buttons are hidden.
+- A minimal legacy configuration with neither group remains daily-only.
+
+Monthly-only example:
+
+```yaml
+type: custom:daily-energy-gradient-card
+entity: sensor.boiler_energy
+name: Boiler consumption by month
+months: 12
+month_options:
+  - 6
+  - 12
+month_max: 240
+unit: kWh
+```
+
 ## Bubble Card pop-up example
 
 ```yaml
@@ -128,11 +152,11 @@ tap_action:
 | --- | --- | --- | --- |
 | `entity` | Yes | — | Continuous cumulative energy sensor. |
 | `name` | No | `Расход энергии` | Card title. |
-| `mode` | No | `daily` | Initially selected mode: `daily` or `monthly`. The user's choice is saved in the browser. |
-| `days` | No | `7` | Initially selected range. |
-| `day_options` | No | `[7, 14, 30]` | Selectable ranges. |
-| `months` | No | `6` | Initially selected number of months. |
-| `month_options` | No | `[3, 6, 12]` | Selectable monthly ranges. |
+| `mode` | No | first enabled mode | Initially selected mode: `daily` or `monthly`. The user's choice is saved in the browser. |
+| `days` | No | `7` | Initially selected range; its presence enables daily mode. |
+| `day_options` | No | selected `days` value | Selectable ranges; its presence enables daily mode. |
+| `months` | No | `6` | Initially selected number of months; its presence enables monthly mode. |
+| `month_options` | No | selected `months` value | Selectable monthly ranges; its presence enables monthly mode. |
 | `max` | No | `8` | Top of the fixed color scale in daily mode. |
 | `month_max` | No | `max × 30` | Top of the fixed color scale in monthly mode. |
 | `unit` | No | `кВт⋅ч` | Displayed unit. |

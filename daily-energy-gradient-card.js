@@ -9,6 +9,19 @@ class DailyEnergyGradientCard extends HTMLElement {
 
   setConfig(config) {
     if (!config?.entity) throw new Error("Укажите entity");
+    const hasOwn = (key) => Object.prototype.hasOwnProperty.call(config, key);
+    const hasDailyConfig = hasOwn("days") || hasOwn("day_options");
+    const hasMonthlyConfig = hasOwn("months") || hasOwn("month_options");
+
+    // Backward compatibility: a minimal configuration without either group
+    // remains a daily card. Otherwise a mode exists only when its YAML group
+    // is explicitly present.
+    this._availableModes = [];
+    if (hasDailyConfig || (!hasDailyConfig && !hasMonthlyConfig)) {
+      this._availableModes.push("daily");
+    }
+    if (hasMonthlyConfig) this._availableModes.push("monthly");
+
     this.config = {
       name: "Расход энергии",
       mode: "daily",
@@ -23,30 +36,41 @@ class DailyEnergyGradientCard extends HTMLElement {
       height: 190,
       ...config,
     };
+    const configuredDays = Math.max(1, Number(this.config.days) || 7);
+    const configuredMonths = Math.max(1, Number(this.config.months) || 6);
+    const defaultDayOptions = hasOwn("day_options")
+      ? this.config.day_options
+      : (hasOwn("days") ? [configuredDays] : [7, 14, 30]);
+    const defaultMonthOptions = hasOwn("month_options")
+      ? this.config.month_options
+      : (hasOwn("months") ? [configuredMonths] : [3, 6, 12]);
     this.config.day_options = [...new Set(
-      (Array.isArray(this.config.day_options) ? this.config.day_options : [7, 14, 30])
+      (Array.isArray(defaultDayOptions) ? defaultDayOptions : [configuredDays])
         .map(Number)
         .filter((value) => Number.isInteger(value) && value > 0),
     )].sort((a, b) => a - b);
-    if (!this.config.day_options.length) this.config.day_options = [7, 14, 30];
+    if (!this.config.day_options.length) this.config.day_options = [configuredDays];
     this.config.month_options = [...new Set(
-      (Array.isArray(this.config.month_options) ? this.config.month_options : [3, 6, 12])
+      (Array.isArray(defaultMonthOptions) ? defaultMonthOptions : [configuredMonths])
         .map(Number)
         .filter((value) => Number.isInteger(value) && value > 0),
     )].sort((a, b) => a - b);
-    if (!this.config.month_options.length) this.config.month_options = [3, 6, 12];
+    if (!this.config.month_options.length) this.config.month_options = [configuredMonths];
 
     const modeStorageKey = `daily-energy-gradient-card:${this.config.entity}:mode`;
     try {
       const savedMode = localStorage.getItem(modeStorageKey);
-      this.config.mode = ["daily", "monthly"].includes(savedMode)
+      this.config.mode = this._availableModes.includes(savedMode)
         ? savedMode
-        : (this.config.mode === "monthly" ? "monthly" : "daily");
+        : (this._availableModes.includes(this.config.mode)
+          ? this.config.mode
+          : this._availableModes[0]);
     } catch (_error) {
-      this.config.mode = this.config.mode === "monthly" ? "monthly" : "daily";
+      this.config.mode = this._availableModes.includes(this.config.mode)
+        ? this.config.mode
+        : this._availableModes[0];
     }
 
-    const configuredDays = Math.max(1, Number(this.config.days) || 7);
     const storageKey = `daily-energy-gradient-card:${this.config.entity}:days`;
     try {
       const savedDays = Number(localStorage.getItem(storageKey));
@@ -60,7 +84,6 @@ class DailyEnergyGradientCard extends HTMLElement {
       this.config.day_options.push(this.config.days);
       this.config.day_options.sort((a, b) => a - b);
     }
-    const configuredMonths = Math.max(1, Number(this.config.months) || 6);
     const monthStorageKey = `daily-energy-gradient-card:${this.config.entity}:months`;
     try {
       const savedMonths = Number(localStorage.getItem(monthStorageKey));
@@ -404,19 +427,28 @@ class DailyEnergyGradientCard extends HTMLElement {
     const currentValue = data[data.length - 1]?.value || 0;
     const chartMinWidth = Math.max(0, data.length * (this.config.mode === "monthly" ? 66 : 54));
 
-    const modeButtons = `
-      <button class="mode-button${this.config.mode === "daily" ? " active" : ""}"
-        data-mode="daily" type="button">Дни</button>
-      <button class="mode-button${this.config.mode === "monthly" ? " active" : ""}"
-        data-mode="monthly" type="button">Месяцы</button>
-    `;
+    const modeLabels = { daily: "Дни", monthly: "Месяцы" };
+    const modeButtons = this._availableModes.length > 1
+      ? this._availableModes.map((mode) => `
+        <button class="mode-button${this.config.mode === mode ? " active" : ""}"
+          data-mode="${mode}" type="button">${modeLabels[mode]}</button>
+      `).join("")
+      : "";
 
     const activeRange = this._rangeValue();
     const rangeSuffix = this.config.mode === "monthly" ? "мес." : "дн.";
-    const rangeButtons = this._rangeOptions().map((range) => `
+    const rangeButtons = this._rangeOptions().length > 1
+      ? this._rangeOptions().map((range) => `
       <button class="range-button${range === activeRange ? " active" : ""}"
         data-range="${range}" type="button">${range} ${rangeSuffix}</button>
-    `).join("");
+      `).join("")
+      : "";
+    const controls = modeButtons || rangeButtons
+      ? `<div class="controls">
+          ${modeButtons ? `<div class="modes">${modeButtons}</div>` : ""}
+          ${rangeButtons ? `<div class="ranges">${rangeButtons}</div>` : ""}
+        </div>`
+      : "";
 
     const bars = data.map((day) => {
       const pct = Math.min(Math.max((day.value / max) * 100, 0), 100);
@@ -567,10 +599,7 @@ class DailyEnergyGradientCard extends HTMLElement {
           <div class="title">${this.config.name}</div>
           <div><span class="today">${currentValue.toFixed(decimals).replace(".", ",")}</span><span class="unit">${this.config.unit}</span></div>
         </div>
-        <div class="controls">
-          <div class="modes">${modeButtons}</div>
-          <div class="ranges">${rangeButtons}</div>
-        </div>
+        ${controls}
         <div class="chart-scroll"><div class="chart">${bars}</div></div>
         ${this._loading && !this._data.length ? '<div class="status">Обновление истории…</div>' : ''}
         ${this._error ? `<div class="status error">${this._error}</div>` : ''}
@@ -599,7 +628,7 @@ class DailyEnergyGradientCard extends HTMLElement {
     this.shadowRoot.querySelectorAll(".mode-button").forEach((button) => {
       button.addEventListener("click", () => {
         const mode = button.dataset.mode;
-        if (!["daily", "monthly"].includes(mode) || mode === this.config.mode) return;
+        if (!this._availableModes.includes(mode) || mode === this.config.mode) return;
         this.config.mode = mode;
         try {
           localStorage.setItem(
