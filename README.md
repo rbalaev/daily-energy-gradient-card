@@ -92,6 +92,11 @@ Modes are enabled by the YAML groups that are present:
 - A minimal legacy configuration with neither group remains daily-only.
 - Browser-saved selections are restored only while the corresponding YAML default and options stay unchanged; editing `days`, `months`, or their option lists takes effect immediately.
 
+`max` is the top of the active mode's gradient scale. For a monthly-only
+card, `max: 107` means that 107 kWh reaches 100% and reveals the red top of
+the gradient. When both modes are enabled, set `month_max` only if the monthly
+scale should differ from the daily `max`.
+
 Monthly-only example:
 
 ```yaml
@@ -158,8 +163,8 @@ tap_action:
 | `day_options` | No | selected `days` value | Selectable ranges; its presence enables daily mode. |
 | `months` | No | `6` | Initially selected number of months; its presence enables monthly mode. |
 | `month_options` | No | selected `months` value | Selectable monthly ranges; its presence enables monthly mode. |
-| `max` | No | `8` | Top of the fixed color scale in daily mode. |
-| `month_max` | No | `max × 30` | Top of the fixed color scale in monthly mode. |
+| `max` | No | `8` | Top of the fixed color scale for the active mode. |
+| `month_max` | No | same as `max` | Optional separate top of the monthly color scale. |
 | `unit` | No | `кВт⋅ч` | Displayed unit. |
 | `decimals` | No | `2` | Decimal places. |
 | `height` | No | `190` | Chart height in pixels. |

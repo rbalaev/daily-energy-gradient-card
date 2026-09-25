@@ -452,8 +452,9 @@ class DailyEnergyGradientCard extends HTMLElement {
     if (!this.shadowRoot || !this.config) return;
 
     const dailyMax = Math.max(Number(this.config.max) || 8, 0.01);
-    const max = this.config.mode === "monthly"
-      ? Math.max(Number(this.config.month_max) || dailyMax * 30, 0.01)
+    const configuredMonthMax = Number(this.config.month_max);
+    const max = this.config.mode === "monthly" && configuredMonthMax > 0
+      ? configuredMonthMax
       : dailyMax;
     const decimals = Math.max(0, Number(this.config.decimals) || 0);
     const data = this._data.length ? this._data : this._periods().map((d) => ({ ...d, value: 0 }));
