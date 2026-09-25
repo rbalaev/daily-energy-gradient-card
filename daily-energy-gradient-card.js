@@ -7,6 +7,36 @@ class DailyEnergyGradientCard extends HTMLElement {
     this._lastLoad = 0;
   }
 
+  _readPreference(key, configuredValue, allowedValues, signature) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || "null");
+      if (
+        saved?.version === 1
+        && saved.configured === configuredValue
+        && saved.signature === signature
+        && allowedValues.includes(saved.value)
+      ) {
+        return saved.value;
+      }
+    } catch (_error) {
+      // Старые значения или закрытый localStorage игнорируются.
+    }
+    return configuredValue;
+  }
+
+  _writePreference(key, value, configuredValue, signature) {
+    try {
+      localStorage.setItem(key, JSON.stringify({
+        version: 1,
+        value,
+        configured: configuredValue,
+        signature,
+      }));
+    } catch (_error) {
+      // Карточка продолжит работать без сохранения выбора.
+    }
+  }
+
   setConfig(config) {
     if (!config?.entity) throw new Error("Укажите entity");
     const hasOwn = (key) => Object.prototype.hasOwnProperty.call(config, key);
@@ -56,47 +86,50 @@ class DailyEnergyGradientCard extends HTMLElement {
         .filter((value) => Number.isInteger(value) && value > 0),
     )].sort((a, b) => a - b);
     if (!this.config.month_options.length) this.config.month_options = [configuredMonths];
-
-    const modeStorageKey = `daily-energy-gradient-card:${this.config.entity}:mode`;
-    try {
-      const savedMode = localStorage.getItem(modeStorageKey);
-      this.config.mode = this._availableModes.includes(savedMode)
-        ? savedMode
-        : (this._availableModes.includes(this.config.mode)
-          ? this.config.mode
-          : this._availableModes[0]);
-    } catch (_error) {
-      this.config.mode = this._availableModes.includes(this.config.mode)
-        ? this.config.mode
-        : this._availableModes[0];
-    }
-
-    const storageKey = `daily-energy-gradient-card:${this.config.entity}:days`;
-    try {
-      const savedDays = Number(localStorage.getItem(storageKey));
-      this.config.days = this.config.day_options.includes(savedDays)
-        ? savedDays
-        : configuredDays;
-    } catch (_error) {
-      this.config.days = configuredDays;
-    }
-    if (!this.config.day_options.includes(this.config.days)) {
-      this.config.day_options.push(this.config.days);
+    if (!this.config.day_options.includes(configuredDays)) {
+      this.config.day_options.push(configuredDays);
       this.config.day_options.sort((a, b) => a - b);
     }
-    const monthStorageKey = `daily-energy-gradient-card:${this.config.entity}:months`;
-    try {
-      const savedMonths = Number(localStorage.getItem(monthStorageKey));
-      this.config.months = this.config.month_options.includes(savedMonths)
-        ? savedMonths
-        : configuredMonths;
-    } catch (_error) {
-      this.config.months = configuredMonths;
-    }
-    if (!this.config.month_options.includes(this.config.months)) {
-      this.config.month_options.push(this.config.months);
+    if (!this.config.month_options.includes(configuredMonths)) {
+      this.config.month_options.push(configuredMonths);
       this.config.month_options.sort((a, b) => a - b);
     }
+
+    const configuredMode = this._availableModes.includes(this.config.mode)
+      ? this.config.mode
+      : this._availableModes[0];
+    const modeSignature = this._availableModes.join(",");
+    this.config.mode = this._readPreference(
+      `daily-energy-gradient-card:${this.config.entity}:mode`,
+      configuredMode,
+      this._availableModes,
+      modeSignature,
+    );
+
+    const daySignature = this.config.day_options.join(",");
+    this.config.days = this._readPreference(
+      `daily-energy-gradient-card:${this.config.entity}:days`,
+      configuredDays,
+      this.config.day_options,
+      daySignature,
+    );
+    const monthSignature = this.config.month_options.join(",");
+    this.config.months = this._readPreference(
+      `daily-energy-gradient-card:${this.config.entity}:months`,
+      configuredMonths,
+      this.config.month_options,
+      monthSignature,
+    );
+    this._preferenceDefaults = {
+      mode: configuredMode,
+      days: configuredDays,
+      months: configuredMonths,
+    };
+    this._preferenceSignatures = {
+      mode: modeSignature,
+      days: this.config.day_options.join(","),
+      months: this.config.month_options.join(","),
+    };
     this._restoreCache();
     this._lastLoad = 0;
     this._render();
@@ -611,14 +644,12 @@ class DailyEnergyGradientCard extends HTMLElement {
         if (!Number.isInteger(range) || range <= 0 || range === this._rangeValue()) return;
         const field = this.config.mode === "monthly" ? "months" : "days";
         this.config[field] = range;
-        try {
-          localStorage.setItem(
-            `daily-energy-gradient-card:${this.config.entity}:${field}`,
-            String(range),
-          );
-        } catch (_error) {
-          // Карточка продолжит работать, даже если хранилище браузера закрыто.
-        }
+        this._writePreference(
+          `daily-energy-gradient-card:${this.config.entity}:${field}`,
+          range,
+          this._preferenceDefaults[field],
+          this._preferenceSignatures[field],
+        );
         this._restoreCache();
         this._lastLoad = 0;
         this._loadHistory();
@@ -630,14 +661,12 @@ class DailyEnergyGradientCard extends HTMLElement {
         const mode = button.dataset.mode;
         if (!this._availableModes.includes(mode) || mode === this.config.mode) return;
         this.config.mode = mode;
-        try {
-          localStorage.setItem(
-            `daily-energy-gradient-card:${this.config.entity}:mode`,
-            mode,
-          );
-        } catch (_error) {
-          // Карточка продолжит работать, даже если хранилище браузера закрыто.
-        }
+        this._writePreference(
+          `daily-energy-gradient-card:${this.config.entity}:mode`,
+          mode,
+          this._preferenceDefaults.mode,
+          this._preferenceSignatures.mode,
+        );
         this._restoreCache();
         this._lastLoad = 0;
         this._loadHistory();

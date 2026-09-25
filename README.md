@@ -90,6 +90,7 @@ Modes are enabled by the YAML groups that are present:
 - Add both groups to show the **Days / Months** switch.
 - If a mode has only one configured range, its range buttons are hidden.
 - A minimal legacy configuration with neither group remains daily-only.
+- Browser-saved selections are restored only while the corresponding YAML default and options stay unchanged; editing `days`, `months`, or their option lists takes effect immediately.
 
 Monthly-only example:
 
